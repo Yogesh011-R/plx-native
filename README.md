@@ -2,8 +2,12 @@
 
 > **This is a modified fork of [PlxNative](https://github.com/GLinnik21/plx-native)** by Gleb Linnik
 > and contributors, licensed under GPL-3.0-or-later. Changes started 2026-10-07: new app id
-> (`com.yogesh.tvplayer`), name and placeholder icons. It is not the official PlxNative app and is
-> not endorsed by its author. The original README follows.
+> (`com.yogesh.tvplayer`), name and placeholder icons; the app now boots into a USB file browser
+> instead of Plex sign-in. It is not the official PlxNative app and is not endorsed by its author.
+>
+> **Goal:** a native webOS video player for USB and local-network files that uses the TV's
+> hardware decoder, without Plex. Status and next steps: [docs/tvplayer-plan.md](docs/tvplayer-plan.md).
+> The original README follows; its Plex features are being removed.
 
 # PlxNative
 

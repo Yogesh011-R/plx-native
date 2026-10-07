@@ -1,5 +1,14 @@
 # Project instructions
 
+## This fork: TVPlayer
+
+This checkout is **TVPlayer**, a fork of PlxNative being turned into a native USB/local-network
+video player with no Plex. **Read `docs/tvplayer-plan.md` first**: it holds the goal, the
+decisions, the milestone status and the development setup, and it is updated in the same commit
+as the work it describes. Where it conflicts with the PlxNative text below (Plex as the product,
+upstream release and telemetry workflows), the plan wins. The app id is `com.yogesh.tvplayer`;
+boots root at the file browser (`rust-modules/screens/src/files.rs`, `AppArg::Files`).
+
 ## Project
 
 PlxNative is a production-quality native Plex client for rooted LG webOS 4.5 TVs. Most of the
