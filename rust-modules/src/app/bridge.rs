@@ -357,6 +357,8 @@ pub(crate) struct Bridge {
     /// …and what the item context menu asked, drained by `content::content_requests` — which holds
     /// the route, the trail and the playback session's `&mut` that its dispatch needs.
     item_menu_reqs: Vec<plx_screens::registry::ItemMenuReq>,
+    /// The file browser's play requests (absolute paths), drained by `run::play_file_requests`.
+    play_files: Vec<String>,
     #[cfg(test)]
     keyboard_calls: Vec<bool>,
     #[cfg(test)]
@@ -562,6 +564,7 @@ impl Bridge {
             search_reqs: Vec::new(),
             player_reqs: Vec::new(),
             item_menu_reqs: Vec::new(),
+            play_files: Vec::new(),
             #[cfg(test)]
             keyboard_calls: Vec::new(),
             #[cfg(test)]
@@ -623,6 +626,9 @@ impl Bridge {
 
     pub(crate) fn take_item_menu_reqs(&mut self) -> Vec<plx_screens::registry::ItemMenuReq> {
         std::mem::take(&mut self.item_menu_reqs)
+    }
+    pub(crate) fn take_play_files(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.play_files)
     }
 
     pub(crate) fn take_search_reqs(&mut self) -> Vec<(MachineId, plx_screens::registry::SearchReq, ReturnState<u32, PageMemory>)> {
@@ -1583,6 +1589,7 @@ impl Bridge {
             AppFx::Search(req) => self.search_reqs.push((from, req, self.effect_return.clone())),
             AppFx::Player(req) => self.player_reqs.push(req),
             AppFx::ItemMenu(req) => self.item_menu_reqs.push(req),
+            AppFx::PlayFile(path) => self.play_files.push(path),
         }
     }
 

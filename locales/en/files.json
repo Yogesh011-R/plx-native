@@ -1,0 +1,22 @@
+{
+  "files.title": {
+    "value": "Videos",
+    "description": "Heading of the file browser at the top folder of the USB drive"
+  },
+  "files.loading": {
+    "value": "Loading…",
+    "description": "Shown in the file browser while a folder is being read"
+  },
+  "files.empty": {
+    "value": "No folders or videos here",
+    "description": "File browser note when a folder has no subfolders and no video files"
+  },
+  "files.unreadable": {
+    "value": "This folder can't be opened",
+    "description": "File browser note when reading a folder fails"
+  },
+  "files.no_drive": {
+    "value": "Connect a USB drive with videos",
+    "description": "File browser note when no USB drive is mounted"
+  }
+}

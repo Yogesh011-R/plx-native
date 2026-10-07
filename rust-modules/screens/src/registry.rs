@@ -64,6 +64,8 @@ pub enum AppFx {
     Player(PlayerReq),
     /// The item context menu's committed row (phase 10) — see [`ItemMenuReq`].
     ItemMenu(ItemMenuReq),
+    /// The file browser's OK on a video: play the file at this absolute path.
+    PlayFile(String),
 }
 
 /// A private live receipt. Requests contain account credentials and are intentionally unsupported
@@ -1179,6 +1181,9 @@ pub mod word {
     /// The who's-watching picker (`screens::profiles::ProfilesScreen`). Same spelling as
     /// `app::words::route_word`'s `AppArg::Profiles` arm — see this module's doc.
     pub const PROFILES: &str = "profiles";
+    /// The file browser (`screens::files::FilesScreen`), TVPlayer's root page. Same spelling as
+    /// `app::words::route_word`'s `AppArg::Files` arm.
+    pub const FILES: &str = "files";
 }
 
 /// An element key for a route-family screen: table rows are their index; the action band's
@@ -1503,6 +1508,9 @@ pub enum AppArg {
     /// The first-run consent question, rooted at this stage byte (0 for every real opening;
     /// `screens::consent`'s `STAGE_PRODUCT` for `/tmp/plxnative-consent=product`).
     FirstRunConsent(u8),
+    /// The USB file browser (`screens::files`) — TVPlayer's root page. It carries nothing: the
+    /// folder being shown is the page's own state.
+    Files,
 }
 
 pub const ARG_SHAPE: &str = "AppArg{Login,Profiles,Onboard,Home,Library,Search,Player,Content:{Detail{sid:u32,rk:str},Person{sid:u32,key:str,guid:str,name:str,thumb:str},Filmography{sid:u32,key:str},Collection{sid:u32,rk:str,sec:i64,tag:i64,name:str}},Settings:SettingsPage{Root,Playback,AudioSubtitles,Favourites,Privacy,Legal,About,Document(u8),Preview(u8),ConsentStage(u8),Language,Contribute},FirstRunConsent(u8),LibraryMenu{host:u32,target:{epoch:u32,sid:u32,section:u64},kind:u32,anchor:[u32;4]},\
@@ -1510,7 +1518,7 @@ pub const ARG_SHAPE: &str = "AppArg{Login,Profiles,Onboard,Home,Library,Search,P
      AltSources{host:u32,sid:u32,rk:str,anchor:[u32;4]},\
      TracksPanel{page:i32},AboutPanel,PersonBio,CollectionAbout,AccountMenu,\
      ItemMenu{sid:u32,rk:str,kind:{Card{from_deck:bool,type:u32},Episode{mark:u32},Season{mark:u32}},\
-     host:u32,focus:Option<{entry:u32,elem:u32}>,anchor:[u32;4],loaded_episode:bool,from_home:bool}}";
+     host:u32,focus:Option<{entry:u32,elem:u32}>,anchor:[u32;4],loaded_episode:bool,from_home:bool},Files}";
 
 impl LogicalState for AppArg {
     fn write(&self, c: &mut Canon) {
@@ -1545,6 +1553,8 @@ impl LogicalState for AppArg {
             Self::Content(arg) => { c.u32(1); arg.write(c); }
             Self::Settings(page) => { c.u32(2); page.write(c); }
             Self::FirstRunConsent(stage) => { c.u32(3).u8(*stage); }
+            // 13, the next free top-level tag (4..=12 are the surfaces above).
+            Self::Files => { c.u32(13); }
         }
     }
     fn probe(&self, out: &mut String) { out.push_str("app_arg"); }
@@ -1574,7 +1584,8 @@ impl plx_ui::screen::ScreenArg for AppArg {
             | AppArg::TracksPanel(_)
             | AppArg::AboutPanel
             | AppArg::PersonBio
-            | AppArg::CollectionAbout => Chrome::None,
+            | AppArg::CollectionAbout
+            | AppArg::Files => Chrome::None,
         }
     }
     fn id(&self) -> ScreenId {
@@ -1619,6 +1630,8 @@ impl plx_ui::screen::ScreenArg for AppArg {
             AppArg::Content(ContentArg::Person { .. }) => 9,
             AppArg::Content(ContentArg::Filmography { .. }) => 14,
             AppArg::Content(ContentArg::Collection(_)) => 23,
+            // 25: allocated forward, after the Collection summary's 24.
+            AppArg::Files => 25,
         })
     }
     fn title(&self) -> Option<&str> {
@@ -1779,6 +1792,7 @@ where
             // reset (see `input::enter_profiles_from_onboard`'s doc for the same argument made
             // about `screens::onboard` in 5b).
             AppArg::Login => Box::new(crate::login::LoginScreen::new(entry, H::auth(cx))),
+            AppArg::Files => Box::new(crate::files::FilesScreen::new(entry)),
             AppArg::Profiles => {
                 let screen = crate::profiles::ProfilesScreen::new(entry, H::auth(cx));
                 fx.push(plx_machine::machine::Fx::App(AppFx::Session(
@@ -1918,7 +1932,8 @@ pub fn every_surface_arg() -> Vec<AppArg> {
             | AppArg::Library
             | AppArg::Search
             | AppArg::Player
-            | AppArg::Content(_) => {
+            | AppArg::Content(_)
+            | AppArg::Files => {
                 panic!("a page argument is not a surface: its word is `route=`")
             }
         }
@@ -1974,6 +1989,7 @@ pub const SCREEN_SHAPES: &[&str] = &[
     "LocalizationSettingsV4{Root:{language:system|en|es|be},Language:{selected:system|en|es|be,focus:u32,busy:bool,failed:bool},Contribute:QrLink,LoginReportAlert:{send:bool,scroll_target_bits:u32},ConsentDisclosure:{scroll_target_bits:u32,scroll_owner:answer_band},ConsentDeleteDisclosure:{scroll_target_bits:u32},BandPart:MeasuredRowOrColumn}",
     crate::preferences::SHAPE,
     crate::preferences::PICKER_SHAPE,
+    crate::files::SHAPE,
 ];
 
 /// The pin over [`SCREEN_SHAPES`] — bump it in the same edit that adds an entry, and say why.
@@ -2077,7 +2093,9 @@ pub const SCREEN_SHAPES: &[&str] = &[
 // carries it too; the previous pin was 0x97ff_59c7_9aab_e35e.
 // Library shelf run (#412): the layout carries the run's height (`shelf_run:f32`) where it carried
 // twelve pitches (`pitches:[f32;12]`); the previous pin was 0x7063_dff7_775b_9075.
-const SCREEN_SHAPES_PIN: u64 = 0xac96_3316_a3a3_7bd4;
+// TVPlayer file browser: `ARG_SHAPE` gains `Files` and `screens::files::SHAPE` joins the array;
+// the previous pin was 0xac96_3316_a3a3_7bd4. Replay fixtures need `tools/plxnative-rec rerecord`.
+const SCREEN_SHAPES_PIN: u64 = 0xee4a_cb85_4470_adab;
 
 #[cfg(test)]
 mod arg_tests {

@@ -1425,6 +1425,16 @@ pub(crate) unsafe fn construct(
         BootTo::Login => AppArg::Login,
         BootTo::Profiles => AppArg::Profiles,
     };
+    // **TVPlayer boots into the file browser.** The Plex pages are no longer a landing: with
+    // Files as the root, `follow_auth_landing` never runs (it is gated on a Login/Profiles top),
+    // and the sign-in's consent question is not owed. A CONTROLLED boot (the recorder/replay
+    // harness) keeps the Plex route above, because its committed fixtures were recorded on it.
+    let route = if controlled {
+        route
+    } else {
+        owes_consent_question = false;
+        AppArg::Files
+    };
     // (dev: /tmp/plxnative-acct used to open the profile menu HERE, beside a
     // `route = Route::Account { over: BarHost::Home }`. The menu is a `ModalStack` surface since
     // phase 10 and the container does not exist yet at this point in the boot, so the trigger is

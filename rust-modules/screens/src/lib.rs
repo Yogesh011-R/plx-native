@@ -27,6 +27,7 @@ pub mod item_menu;
 pub mod library;
 pub mod search;
 pub mod family;
+pub mod files;
 pub mod legal;
 pub mod login;
 pub mod onboard;

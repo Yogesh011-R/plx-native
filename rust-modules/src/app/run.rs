@@ -1938,6 +1938,13 @@ pub(super) fn reduce_navigation_request(request: plx_screens::registry::LoopReq,
 }
 
 fn loop_requests(app: &mut App) {
+    // The file browser's OK on a video. Playback of a local file is not wired yet (it needs a
+    // file source in `ff.rs` beside the http/https ones), so the request is only logged — by
+    // extension, never by name: the event log can leave the set, and a file name is the viewer's.
+    for path in app.bridge.take_play_files() {
+        let ext = std::path::Path::new(&path).extension().and_then(|e| e.to_str()).unwrap_or("");
+        log(&format!("files: play requested (.{ext}) — local playback is not wired yet"));
+    }
     for req in app.bridge.take_reqs() {
         let req = match reduce_navigation_request(req, &mut app.pages) {
             Ok(()) => continue,
@@ -2604,6 +2611,9 @@ pub(crate) unsafe fn report(app: &mut App, fr: &mut Frame) {
                     crate::focusprobe::Screen::Onboard { list, row }
                 }
                 AppArg::Home => crate::focusprobe::Screen::Home,
+                // The file browser has no probe grammar of its own yet; it reads as Home's
+                // bare page line.
+                AppArg::Files => crate::focusprobe::Screen::Home,
                 // (`Route::ItemMenu`'s arm stood here, mapping the popover's `MenuHost` to the
                 // probe's own `Host` mirror and recursing into that screen's fields. The menu is a
                 // SURFACE since phase 10: the page under it is the top page, which this line
