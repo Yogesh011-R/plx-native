@@ -1938,12 +1938,25 @@ pub(super) fn reduce_navigation_request(request: plx_screens::registry::LoopReq,
 }
 
 fn loop_requests(app: &mut App) {
-    // The file browser's OK on a video. Playback of a local file is not wired yet (it needs a
-    // file source in `ff.rs` beside the http/https ones), so the request is only logged — by
-    // extension, never by name: the event log can leave the set, and a file name is the viewer's.
-    for path in app.bridge.take_play_files() {
-        let ext = std::path::Path::new(&path).extension().and_then(|e| e.to_str()).unwrap_or("");
-        log(&format!("files: play requested (.{ext}) — local playback is not wired yet"));
+    // The file browser's OK on a playable video: install its declaration and start it from the
+    // browser, which is the page the player returns to on BACK or at the end. Logged by extension,
+    // never by name: the event log can leave the set, and a file name is the viewer's.
+    for play in app.bridge.take_play_files() {
+        let ext = play.path.extension().and_then(|e| e.to_str()).unwrap_or("").to_string();
+        if !plx_media::player::local::install(&mut app.player.session, &play) {
+            log(&format!("files: declaration refused (.{ext})"));
+            continue;
+        }
+        let started = crate::app::playback::start_playback(&mut app.player.session,
+            &mut app.adapters.player,
+            0,
+            crate::app::playback::Origin::Here,
+            HUD_LINGER_MS,
+            None,
+            &mut app.pages,
+            &mut app.bridge,
+        );
+        log(&format!("files: play (.{ext}) {}", if started { "started" } else { "refused" }));
     }
     for req in app.bridge.take_reqs() {
         let req = match reduce_navigation_request(req, &mut app.pages) {

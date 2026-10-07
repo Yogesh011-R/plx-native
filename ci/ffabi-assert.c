@@ -76,6 +76,9 @@ SAME64(offsetof(AVStream, time_base), 32, "OFF_STREAM_TIME_BASE != 20 [host]");
    AVFrame.pts carries below. */
 SAME32(offsetof(AVStream, metadata), 72, "OFF_STREAM_METADATA != 72");
 SAME64(offsetof(AVStream, metadata), 80, "OFF_STREAM_METADATA != 72 [host]");
+/* The average frame rate, read by probe_file for a local file's Load declaration. */
+SAME32(offsetof(AVStream, avg_frame_rate), 76, "OFF_STREAM_AVG_FRAME_RATE != 76");
+SAME64(offsetof(AVStream, avg_frame_rate), 88, "OFF_STREAM_AVG_FRAME_RATE != 76 [host]");
 SAME(offsetof(AVDictionaryEntry, key), 0, "AVDictionaryEntry.key moved");
 SAME32(offsetof(AVDictionaryEntry, value), 4, "AVDictionaryEntry.value moved");
 SAME64(offsetof(AVDictionaryEntry, value), 8, "AVDictionaryEntry.value moved [host]");

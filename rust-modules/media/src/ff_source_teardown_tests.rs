@@ -1,4 +1,4 @@
-//! HTTP and libcurl source teardown/abort behavior: seek-after-teardown, aborted
+//! HTTP, libcurl and local-file source teardown/abort behavior: seek-after-teardown, aborted
 //! read/seek races, and stalled or IO-failed transports across both transports.
 
 use super::*;
@@ -732,4 +732,59 @@ fn a_demux_aborted_by_teardown_before_its_first_unit_is_not_a_failure() {
         open_input_failure_note(-1_094_995_529, false),
         "ff: open_input failed r=-1094995529",
     );
+}
+
+/// A local file under the AVIO (`Src::File`): reads advance the offset, a seek lands on the byte
+/// asked for, the end of the file is a clean EOF, and the size query answers the file's length.
+/// Then teardown: once the lane is aborted, a read is EOF and a seek is refused — the lane checks
+/// are the file source's whole teardown, since its reads never block.
+#[test]
+fn a_local_file_reads_seeks_and_ends_through_the_avio_callbacks() {
+    let dir = std::env::temp_dir().join(format!("plx-ff-file-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("clip.bin");
+    std::fs::write(&path, b"0123456789").unwrap();
+    let (src, size) = open_local_file(&path).expect("the file opens");
+    assert!(matches!(src, Src::File(_)));
+    assert_eq!(size, 10);
+    let mut aq = crate::aq::aq_new(1 << 20);
+    let mut st = AvioState {
+        src,
+        aq: &mut *aq,
+        off: 0,
+        size,
+        io_failed: false,
+        body_active_us: 0,
+        body_bytes: 0,
+        first_byte_at: None,
+        reserve_deadline: ReserveDeadlineState::new(None, false),
+        transport_watchdog: None,
+        acquisition: None,
+        bounce: Vec::new(),
+        bounce_pos: 0,
+    };
+    let op = &mut st as *mut AvioState as *mut c_void;
+    let mut buf = [0u8; 4];
+
+    assert_eq!(read_cb(op, buf.as_mut_ptr(), 4), 4);
+    assert_eq!(&buf, b"0123");
+    assert_eq!(seek_cb(op, 7, SEEK_SET), 7);
+    assert_eq!(read_cb(op, buf.as_mut_ptr(), 4), 3);
+    assert_eq!(&buf[..3], b"789");
+    assert_eq!(read_cb(op, buf.as_mut_ptr(), 4), AVERROR_EOF, "the end of the file is EOF");
+    assert!(!st.io_failed, "a clean end is not an I/O failure");
+    assert_eq!(seek_cb(op, -2, SEEK_END), 8);
+    assert_eq!(seek_cb(op, 0, AVSEEK_SIZE), 10);
+
+    crate::aq::aq_abort(&mut *aq);
+    assert_eq!(read_cb(op, buf.as_mut_ptr(), 4), AVERROR_EOF);
+    assert_eq!(seek_cb(op, 0, SEEK_SET), -1);
+    drop(st);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A file that cannot be opened is refused at the open, not handed to libavformat.
+#[test]
+fn a_missing_local_file_does_not_open() {
+    assert!(open_local_file(std::path::Path::new("/nonexistent/plx/clip.mkv")).is_none());
 }

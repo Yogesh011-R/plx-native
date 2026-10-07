@@ -64,8 +64,9 @@ pub enum AppFx {
     Player(PlayerReq),
     /// The item context menu's committed row (phase 10) — see [`ItemMenuReq`].
     ItemMenu(ItemMenuReq),
-    /// The file browser's OK on a video: play the file at this absolute path.
-    PlayFile(String),
+    /// The file browser's OK on a playable video: the file and the Load declaration to play it
+    /// with (`player::local`).
+    PlayFile(plx_media::player::local::LocalPlay),
 }
 
 /// A private live receipt. Requests contain account credentials and are intentionally unsupported
@@ -2095,7 +2096,9 @@ pub const SCREEN_SHAPES: &[&str] = &[
 // twelve pitches (`pitches:[f32;12]`); the previous pin was 0x7063_dff7_775b_9075.
 // TVPlayer file browser: `ARG_SHAPE` gains `Files` and `screens::files::SHAPE` joins the array;
 // the previous pin was 0xac96_3316_a3a3_7bd4. Replay fixtures need `tools/plxnative-rec rerecord`.
-const SCREEN_SHAPES_PIN: u64 = 0xee4a_cb85_4470_adab;
+// TVPlayer local playback (M2): the file browser's shape carries its `notice` (Opening / a
+// refusal); the previous pin was 0xee4a_cb85_4470_adab.
+const SCREEN_SHAPES_PIN: u64 = 0x7e62_ae8e_6c65_e760;
 
 #[cfg(test)]
 mod arg_tests {

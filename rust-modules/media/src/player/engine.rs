@@ -655,6 +655,12 @@ fn parse_sinkmax(spec: &str) -> Option<SinkEnvelope> {
 /// LG's buffer-feed vocabulary. libpf CustomPipeline::parseOptionStringSpi accepts DTS;
 /// getAudioCaps selects audio/x-dts and setAdecSinkInfo_ES configures dts-seamless (issue #221).
 /// Unsupported formats must never be mislabeled as AC3: that can stall the audio master clock.
+/// Can the Load payload declare this audio codec (FFmpeg's name)? A local file's declaration picks
+/// its audio track by this ([`super::local::decide`]), so the rule lives in one place.
+pub(crate) fn audio_declarable(codec: &str) -> bool {
+    audio_payload_codec(codec).is_some()
+}
+
 fn audio_payload_codec(codec: &str) -> Option<(&'static str, u8)> {
     match codec {
         "ac3" => Some(("AC3", 1)),
@@ -988,6 +994,30 @@ fn stream_open_log_line(origin_log_form: &str, path: &str) -> String {
     format!("stream: {origin_log_form} path={path}")
 }
 
+/// The demux source for a stream on a server: the URL split into its origin and path, refused
+/// (`None`) when it would carry a credential over cleartext.
+///
+/// **The whole ORIGIN goes down, not a `(host, port)` pair, because the SCHEME chooses the
+/// transport**: `ff::demux` reads http through `plx_net::stream`'s cleartext socket and https
+/// through `crate::curlio`. This used to REFUSE an https origin outright — cleartext to a TLS port
+/// is a hang or a garbage response with nothing in the log — and that refusal is what a remote QA
+/// reviewer, with no PMS on their LAN, would have hit on every Play. Rebuilding the origin from an
+/// address would put the refusal back in a subtler form: the certificate is issued for the
+/// `plex.direct` NAME, so a TLS connection to the dotted quad behind it fails validation however
+/// well the packets flow (`net/origin.rs`).
+fn remote_source(url: &str) -> Option<crate::ff::DemuxSource> {
+    let su = plx_plex::plex::StreamUrl::parse(url); // the typed layer's URL splitter
+    if !plx_plex::http::credential_transport_allowed(&su.origin, &su.path, &[]) {
+        plx_base::eventlog::log("stream: refused insecure credential transport");
+        return None;
+    }
+    log(&stream_open_log_line(&su.origin.log_form(), &su.path));
+    Some(crate::ff::DemuxSource::Remote {
+        origin: su.origin,
+        path: su.path,
+    })
+}
+
 fn start_bufferfeed_for(
     ps: &mut crate::route::PlaybackSession,
     pa: &mut super::adapter::PlayerAdapter,
@@ -1262,22 +1292,19 @@ fn start_bufferfeed_inner(
     let side_target = if stream { crate::route::side_reader_target(ps) } else { None };
 
     if stream {
-        let su = plx_plex::plex::StreamUrl::parse(&url); // the typed layer's URL splitter
-                                                      // **The whole ORIGIN goes down, not a `(host, port)` pair, because the SCHEME chooses the
-                                                      // transport**: `ff::demux` reads http through `plx_net::stream`'s cleartext socket and https
-                                                      // through `crate::curlio`. This used to REFUSE an https origin outright — cleartext to a
-                                                      // TLS port is a hang or a garbage response with nothing in the log — and that refusal is
-                                                      // what a remote QA reviewer, with no PMS on their LAN, would have hit on every Play.
-                                                      // Rebuilding the origin from an address would put the refusal back in a subtler form: the
-                                                      // certificate is issued for the `plex.direct` NAME, so a TLS connection to the dotted quad
-                                                      // behind it fails validation however well the packets flow (`net/origin.rs`).
-        if !plx_plex::http::credential_transport_allowed(&su.origin, &su.path, &[]) {
-            plx_base::eventlog::log("stream: refused insecure credential transport");
-            return Err(crate::route::RouteStartResult::StartFailed);
-        }
-        let path = su.path;
-        log(&stream_open_log_line(&su.origin.log_form(), &path));
-        let origin = su.origin;
+        let demux_source = match super::local::file_path(&url) {
+            // A local file (the file browser's play): no origin, no credentials, and never a name
+            // in the log — the extension is all the line needs to say what kind of file it was.
+            Some(file) => {
+                let ext = file.extension().and_then(|e| e.to_str()).unwrap_or("");
+                log(&format!("stream: local file (.{ext})"));
+                crate::ff::DemuxSource::File(file)
+            }
+            None => match remote_source(&url) {
+                Some(source) => source,
+                None => return Err(crate::route::RouteStartResult::StartFailed),
+            },
+        };
         // Two-lane feed: the demuxer routes es=1 video to aq_video and es=2 audio to
         // aq_audio, each with its own cap + feeder.
         let mut qv = crate::aq::aq_new(AQ_VIDEO_BYTES);
@@ -1303,7 +1330,7 @@ fn start_bufferfeed_inner(
             let auto_original = crate::route::auto_original_watch(ps);
             SHARED.side_subs_owner.store(side_target.is_some(), Ordering::Release);
             stream_th = plx_base::task::spawn_off_frame_keeping("demux", move |off| {
-                crate::ff::demux(off, origin, path, acodec, abr, auto_original, aqp, aqap, hsp)
+                crate::ff::demux(off, demux_source, acodec, abr, auto_original, aqp, aqap, hsp)
             });
             if stream_th.is_none() {
                 SHARED.side_subs_owner.store(false, Ordering::Release);

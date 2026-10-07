@@ -21,6 +21,7 @@ pub mod ass; // pinned libass worker and immutable rendered frames
 pub mod ass_source; // bounded embedded scripts and subtitle presentation clock
 pub mod engine;
 pub mod lifecycle;
+pub mod local; // local-file playback: probe a file, decide its Load declaration, install it
 pub mod machine;
 pub mod playurl; // the `plxnative-playurl` dev trigger: a stream and its Load declaration, parsed beside the engine that acts on it
 pub mod preview;

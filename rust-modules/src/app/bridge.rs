@@ -357,8 +357,9 @@ pub(crate) struct Bridge {
     /// …and what the item context menu asked, drained by `content::content_requests` — which holds
     /// the route, the trail and the playback session's `&mut` that its dispatch needs.
     item_menu_reqs: Vec<plx_screens::registry::ItemMenuReq>,
-    /// The file browser's play requests (absolute paths), drained by `run::play_file_requests`.
-    play_files: Vec<String>,
+    /// The file browser's play requests (a file and its Load declaration), drained by
+    /// `run::loop_requests`.
+    play_files: Vec<plx_media::player::local::LocalPlay>,
     #[cfg(test)]
     keyboard_calls: Vec<bool>,
     #[cfg(test)]
@@ -627,7 +628,7 @@ impl Bridge {
     pub(crate) fn take_item_menu_reqs(&mut self) -> Vec<plx_screens::registry::ItemMenuReq> {
         std::mem::take(&mut self.item_menu_reqs)
     }
-    pub(crate) fn take_play_files(&mut self) -> Vec<String> {
+    pub(crate) fn take_play_files(&mut self) -> Vec<plx_media::player::local::LocalPlay> {
         std::mem::take(&mut self.play_files)
     }
 
@@ -1589,7 +1590,7 @@ impl Bridge {
             AppFx::Search(req) => self.search_reqs.push((from, req, self.effect_return.clone())),
             AppFx::Player(req) => self.player_reqs.push(req),
             AppFx::ItemMenu(req) => self.item_menu_reqs.push(req),
-            AppFx::PlayFile(path) => self.play_files.push(path),
+            AppFx::PlayFile(play) => self.play_files.push(play),
         }
     }
 

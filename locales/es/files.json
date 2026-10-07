@@ -3,5 +3,13 @@
   "files.loading": "Cargando…",
   "files.empty": "No hay carpetas ni vídeos aquí",
   "files.unreadable": "No se puede abrir esta carpeta",
-  "files.no_drive": "Conecta una memoria USB con vídeos"
+  "files.no_drive": "Conecta una memoria USB con vídeos",
+  "files.opening": "Abriendo…",
+  "files.cant_play.unreadable": "No se puede abrir este archivo",
+  "files.cant_play.player": "El reproductor de vídeo no está disponible en este televisor",
+  "files.cant_play.no_video": "Este archivo no tiene vídeo",
+  "files.cant_play.video_codec": "Este televisor no puede reproducir vídeo {codec}",
+  "files.cant_play.no_audio": "Aún no se pueden reproducir vídeos sin sonido",
+  "files.cant_play.audio_codec": "Este televisor no puede reproducir audio {codec}",
+  "files.cant_play.dolby_vision": "Este vídeo Dolby Vision no se puede mostrar en este televisor"
 }

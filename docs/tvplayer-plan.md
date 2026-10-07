@@ -54,20 +54,27 @@ Status: ✅ done · 🔄 next · ⬜ planned
   `AppFx::PlayFile(path)`; BACK goes up, and at the root hands BACK to the TV.
 - Registered as `AppArg::Files` (screen id 25, canon tag 13, route word `files`).
 - `boot.rs`: non-controlled boots root at Files. `files.*` messages in en/es/be.
-- `run.rs` drains `PlayFile` and only logs it (by extension, never by name).
+- `run.rs` drained `PlayFile` and only logged it (by extension, never by name); M2 plays it.
 - Verified in the Linux simulator and by unit tests.
 
-### 🔄 M2 — Play a local file
-1. Add a **file source** to `ff.rs`'s AVIO beside the `http` (`stream.rs`) and `https`
-   (`curlio.rs`) arms: read/seek/size on a plain file descriptor, plus teardown.
-2. **Probe the file** for its video and audio codecs, frame rate and raster. The Starfish `Load`
-   payload must declare them honestly (see the player CLAUDE.md: wrong codecs mean silent audio
-   or a refused Load).
-3. In `run.rs`, turn `PlayFile` into a synthetic play URL + declaration and call
-   `start_playback`; return to the file browser when playback ends or BACK is pressed.
-4. Show a readable error for files the TV cannot decode.
-- **Verify on a TV.** The Linux simulator has no video path; the most it shows is the request
-  reaching the player.
+### 🔄 M2 — Play a local file (code done; awaiting a TV)
+- `ff.rs`: a **file source** (`Src::File`) beside the http/https ones, chosen by
+  `DemuxSource::File`; `probe_file` reads codecs, raster, frame rate (`AVStream.avg_frame_rate`,
+  asserted in `ci/ffabi-assert.c`) and the Dolby Vision record.
+- `player/local.rs`: `decide` turns the probe into the Load declaration or a `Refusal`
+  (video not H.264/HEVC, no AC3/E-AC3/AAC/DTS audio track, no video, no audio, a Dolby Vision
+  layering the set cannot show); `install` puts the declaration and a `file://` URL in the route.
+  The engine sends `file://` URLs to the file source.
+- `files.rs`: OK on a video probes it on a worker ("Opening…"); a playable file becomes
+  `AppFx::PlayFile(LocalPlay)`, a refusal stays on the browser as a note. `run.rs` installs and
+  calls `start_playback` from the browser, so BACK and end-of-file return there. Logs carry the
+  extension only, never a file name.
+- Known gaps: video-only files are refused (the payload needs an audio codec); the bundled
+  FFmpeg has no AVI/MPEG-PS/WMV/FLV demuxer, so those list but refuse as unreadable; the player
+  HUD shows no title for a local file.
+- **Still to verify on a TV**: the 32-bit offset (CI's cross-build compiles the assertion), the
+  Load, picture, sound, seeking and BACK. The Linux simulator shows only the probe, the
+  declaration and the demuxer opening the file.
 
 ### ⬜ M3 — Confirm the TV side
 - Find where webOS mounts USB storage and whether a Developer Mode app can read it (the jail).
@@ -113,6 +120,11 @@ Building, installing and launching the `.ipk` on a TV, step by step:
     A test tree is at `~/.cache/tvplayer/test-media`.
   - Keys: arrows, Enter = OK, Esc/`q` = Back. The mouse acts as the Magic Remote pointer.
   - Log: `~/.local/state/tvplayer-sim/plxnative-events.log`.
+  - To exercise local-file probing and demuxing, the simulator needs FFmpeg 9 (libavformat 63)
+    in its app dir under the `-plx` names. Building it (`HOST=1 ci/build-ffmpeg.sh`) needs
+    `nasm`; a system FFmpeg of the same majors can stand in by symlinking
+    `libavutil-plx.so.61`, `libavcodec-plx.so.63` and `libavformat-plx.so.63` to it. The
+    system build has more demuxers than the bundled one, so refusals can differ.
 - **Tests:** `cargo test --lib -p plx_screens` and `-p plxnative-modules` (also with
   `--features plxnative-modules/hostsim`), `python3 ci/check-localization.py`,
   `bash ci/check-deps.sh`. Point `CARGO_TARGET_DIR` at a Linux filesystem.

@@ -2,6 +2,12 @@
 //! drive (or any media root), opens a folder on OK, goes up on BACK, and asks the application to
 //! play a video file ([`AppFx::PlayFile`]).
 //!
+//! **A video is read before it is played.** OK on a file probes it on a worker
+//! (`player::local::probe`: its container, codecs, frame rate and Dolby Vision) and shows
+//! "Opening…" meanwhile. A file the television can play becomes [`AppFx::PlayFile`] carrying the
+//! Load declaration; one it cannot keeps the viewer here, with the reason as a note at the top of
+//! the list. The note goes with the next folder change or the next play.
+//!
 //! **Where it looks.** `PLXNATIVE_MEDIA_ROOT` when set (the simulator's dev knob), else the first
 //! of [`TV_ROOTS`] that exists on the television, else `$HOME/Videos`, else `$HOME`. The root is
 //! resolved once, at mount.
@@ -24,6 +30,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, TryRecvError};
 
 use crate::registry::{AppFx, AppLike};
+use plx_media::player::local::{LocalPlay, Refusal};
 use plx_machine::machine::{
     Canon, Cx, Edge, Effects, EntryId, FocusKey, Fx, GroupId, Handled, InputKind, Key,
     LogicalState, Machine,
@@ -39,7 +46,7 @@ use plx_ui::table::Row;
 use plx_ui::{Painter, Rect};
 
 pub const SHAPE: &str =
-    "Files{root:str,cwd:str,generation:u32,state:{Loading,Ready([{name:str,dir:bool}]),Missing,Failed},trail:[u32],sel:u32,table:TableViewMotion}";
+    "Files{root:str,cwd:str,generation:u32,state:{Loading,Ready([{name:str,dir:bool}]),Missing,Failed},trail:[u32],notice:{None,Opening,Refused(str)},sel:u32,table:TableViewMotion}";
 
 /// Where webOS mounts USB storage, in the order tried. Unverified on a set: the first one that
 /// exists wins, and `PLXNATIVE_MEDIA_ROOT` overrides all of them.
@@ -57,6 +64,37 @@ const VIDEO_EXTENSIONS: &[&str] = &[
 pub struct Entry {
     pub name: String,
     pub dir: bool,
+}
+
+/// The line above the rows about the last video chosen.
+#[derive(Clone, PartialEq, Eq)]
+enum Notice {
+    None,
+    /// The chosen file is being read.
+    Opening,
+    /// The chosen file cannot be played here, and why.
+    Refused(Refusal),
+}
+
+type ProbeResult = Result<LocalPlay, Refusal>;
+
+/// A codec as the viewer reads it: FFmpeg's name, upper-cased (`vp9` → `VP9`).
+fn codec_label(codec: &str) -> String {
+    codec.to_ascii_uppercase()
+}
+
+/// The viewer's wording for a refusal.
+fn refusal_text(why: &Refusal) -> String {
+    use plx_platform::i18n::msg;
+    match why {
+        Refusal::PlayerUnavailable => msg::files_cant_play_player().to_string(),
+        Refusal::Unreadable => msg::files_cant_play_unreadable().to_string(),
+        Refusal::NoVideo => msg::files_cant_play_no_video().to_string(),
+        Refusal::VideoCodec(c) => msg::files_cant_play_video_codec(&codec_label(c)).to_string(),
+        Refusal::NoAudio => msg::files_cant_play_no_audio().to_string(),
+        Refusal::AudioCodec(c) => msg::files_cant_play_audio_codec(&codec_label(c)).to_string(),
+        Refusal::DolbyVision(_) => msg::files_cant_play_dolby_vision().to_string(),
+    }
 }
 
 /// What the current folder looks like right now.
@@ -146,6 +184,10 @@ pub struct FilesScreen {
     trail: Vec<usize>,
     /// The row to select when the next listing lands (set by BACK).
     restore: Option<usize>,
+    notice: Notice,
+    /// The probe of the video being opened. At most one runs; OK on another video meanwhile is
+    /// ignored.
+    opening: Option<Receiver<ProbeResult>>,
     form: FormTable<usize, usize, Infallible>,
     ground: RouteGround,
 }
@@ -162,6 +204,8 @@ impl FilesScreen {
             pending: None,
             trail: Vec::new(),
             restore: None,
+            notice: Notice::None,
+            opening: None,
             form: FormTable::new(crate::registry::BAND),
             ground: RouteGround::new(),
         }
@@ -171,6 +215,9 @@ impl FilesScreen {
     fn load(&mut self) {
         self.generation = self.generation.wrapping_add(1);
         self.listing = Listing::Loading;
+        if self.opening.is_none() {
+            self.notice = Notice::None;
+        }
         self.rebuild();
         let (tx, rx) = std::sync::mpsc::channel();
         let dir = self.cwd.clone();
@@ -184,6 +231,56 @@ impl FilesScreen {
             self.listing = Listing::Failed;
             self.rebuild();
         }
+    }
+
+    /// Read the chosen video on a worker; [`Self::poll_probe`] takes the answer.
+    fn open_video(&mut self, path: PathBuf) {
+        if self.opening.is_some() {
+            return;
+        }
+        let (tx, rx) = std::sync::mpsc::channel();
+        let spawned = plx_base::task::spawn_off_frame("files-probe", move |_| {
+            let _ = tx.send(plx_media::player::local::probe(&path));
+            plx_machine::present::wake_from_worker();
+        });
+        if spawned {
+            self.opening = Some(rx);
+            self.set_notice(Notice::Opening);
+        } else {
+            self.set_notice(Notice::Refused(Refusal::Unreadable));
+        }
+    }
+
+    /// Take a landed probe: a playable file is handed to the application, a refusal is shown.
+    fn poll_probe<H: AppLike>(&mut self, fx: &mut Effects<'_, H>) -> bool {
+        let Some(rx) = &self.opening else { return false };
+        let landed = match rx.try_recv() {
+            Ok(result) => result,
+            Err(TryRecvError::Empty) => return false,
+            Err(TryRecvError::Disconnected) => Err(Refusal::Unreadable),
+        };
+        self.opening = None;
+        match landed {
+            Ok(play) => {
+                self.set_notice(Notice::None);
+                fx.push(Fx::App(AppFx::PlayFile(play)));
+            }
+            Err(why) => {
+                plx_base::eventlog::log(&format!("files: cannot play ({})", why.log_form()));
+                self.set_notice(Notice::Refused(why));
+            }
+        }
+        true
+    }
+
+    /// Change the notice, keeping the selected row.
+    fn set_notice(&mut self, notice: Notice) {
+        if self.notice == notice {
+            return;
+        }
+        self.notice = notice;
+        self.restore = self.form.selected_key().map(|k| k.0 as usize - 1);
+        self.rebuild();
     }
 
     /// Take a landed listing, if the worker has answered for the current folder.
@@ -217,6 +314,11 @@ impl FilesScreen {
     fn rebuild(&mut self) {
         use plx_platform::i18n::msg;
         let mut section = FormSection::<usize, usize, Infallible>::new(self.heading());
+        match &self.notice {
+            Notice::None => {}
+            Notice::Opening => section = section.note(msg::files_opening()),
+            Notice::Refused(why) => section = section.note(refusal_text(why)),
+        }
         match &self.listing {
             Listing::Loading => section = section.note(msg::files_loading()),
             Listing::Missing => section = section.note(msg::files_no_drive()),
@@ -247,7 +349,7 @@ impl FilesScreen {
     }
 
     /// OK on a row: enter a folder, or ask the application to play a video.
-    fn activate<H: AppLike>(&mut self, elem: u32, fx: &mut Effects<'_, H>) {
+    fn activate(&mut self, elem: u32) {
         let Some(index) = self
             .form
             .index_of_key(RowKey(elem))
@@ -266,7 +368,7 @@ impl FilesScreen {
             self.cwd = path;
             self.load();
         } else {
-            fx.push(Fx::App(AppFx::PlayFile(path.to_string_lossy().into_owned())));
+            self.open_video(path);
         }
     }
 
@@ -289,7 +391,7 @@ impl<H: AppLike> Machine<H> for FilesScreen {
         match ev {
             ScreenEvent::Mount => self.load(),
             ScreenEvent::Tick(tick) => {
-                if self.poll() {
+                if self.poll() | self.poll_probe(fx) {
                     fx.invalidate(plx_machine::present::Provenance::Landing(fx.from()));
                 }
                 self.form.table.update(tick.dt(), frame().h);
@@ -300,10 +402,10 @@ impl<H: AppLike> Machine<H> for FilesScreen {
                     self.form.table.sel = row as i32;
                 }
             }
-            ScreenEvent::Activate(elem) => self.activate(*elem, fx),
+            ScreenEvent::Activate(elem) => self.activate(*elem),
             ScreenEvent::PressCommit(_) => {
                 if let Some(key) = cx.focus.current {
-                    self.activate(key.elem, fx);
+                    self.activate(key.elem);
                 }
             }
             ScreenEvent::Input(input) => {
@@ -432,6 +534,17 @@ impl LogicalState for FilesScreen {
         c.seq(self.trail.len());
         for i in &self.trail {
             c.u32(*i as u32);
+        }
+        match &self.notice {
+            Notice::None => {
+                c.u32(0);
+            }
+            Notice::Opening => {
+                c.u32(1);
+            }
+            Notice::Refused(why) => {
+                c.u32(2).str(&why.log_form());
+            }
         }
         c.u32(self.form.table.sel as u32);
         self.form.table.write_motion(c);

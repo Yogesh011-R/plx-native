@@ -3,5 +3,13 @@
   "files.loading": "Загрузка…",
   "files.empty": "Тут няма тэчак і відэа",
   "files.unreadable": "Не ўдалося адкрыць тэчку",
-  "files.no_drive": "Падключыце USB-назапашвальнік з відэа"
+  "files.no_drive": "Падключыце USB-назапашвальнік з відэа",
+  "files.opening": "Адкрыццё…",
+  "files.cant_play.unreadable": "Не ўдалося адкрыць гэты файл",
+  "files.cant_play.player": "Відэаплэер недаступны на гэтым тэлевізары",
+  "files.cant_play.no_video": "У гэтым файле няма відэа",
+  "files.cant_play.video_codec": "Гэты тэлевізар не можа прайграць відэа {codec}",
+  "files.cant_play.no_audio": "Відэа без гуку пакуль нельга прайграць",
+  "files.cant_play.audio_codec": "Гэты тэлевізар не можа прайграць гук {codec}",
+  "files.cant_play.dolby_vision": "Гэта відэа Dolby Vision нельга паказаць на гэтым тэлевізары"
 }

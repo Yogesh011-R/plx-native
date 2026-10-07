@@ -105,6 +105,14 @@ const OFF_STREAM_TIME_BASE: usize = 32;
 const OFF_STREAM_METADATA: usize = 72;
 #[cfg(target_pointer_width = "64")]
 const OFF_STREAM_METADATA: usize = 80;
+/// `AVStream.avg_frame_rate` — the stream's average frame rate, the field directly after
+/// `metadata`. Read only by [`probe_file`]: a local file has no server to report its frame rate,
+/// and the Load payload's `videoFpsValue`/`videoFpsScale` pair (and the H.264 sink envelope's rate
+/// class) want it.
+#[cfg(target_pointer_width = "32")]
+const OFF_STREAM_AVG_FRAME_RATE: usize = 76;
+#[cfg(target_pointer_width = "64")]
+const OFF_STREAM_AVG_FRAME_RATE: usize = 88;
 /// `AVFormatContext.duration`, in AV_TIME_BASE units. By offset — see the struct's closing note.
 #[cfg(target_pointer_width = "32")]
 const OFF_FMT_DURATION: usize = 64;
@@ -533,6 +541,10 @@ unsafe fn stream_codecpar(s: *mut AVStream) -> *mut AVCodecParameters {
 #[inline]
 unsafe fn stream_time_base(s: *mut AVStream) -> AVRational {
     *((s as *const u8).add(OFF_STREAM_TIME_BASE) as *const AVRational)
+}
+#[inline]
+unsafe fn stream_avg_frame_rate(s: *mut AVStream) -> AVRational {
+    *((s as *const u8).add(OFF_STREAM_AVG_FRAME_RATE) as *const AVRational)
 }
 
 /// PURE: read an [`AVDOVIDecoderConfigurationRecord`] out of the raw side-data bytes.
@@ -1452,6 +1464,10 @@ const AVSEEK_SIZE: c_int = 0x10000;
 /// * [`Src::Curl`] is the https path ([`crate::curlio`]), which the demux thread owns outright.
 ///   `ff.rs` never learns curl-multi mechanics: all it can ask is `read`/`seek`/`size`/`status`/
 ///   `abort`, deliberately the same five questions the socket answers.
+/// * [`Src::File`] is a local file (a USB drive), chosen by [`DemuxSource::File`] rather than by a
+///   scheme. Reads and seeks are plain `read(2)`/`lseek(2)`: they return on their own, so there
+///   is no wake to fire at teardown — the lane-abort checks at the top of both callbacks are the
+///   whole of its teardown, and dropping the state closes the descriptor.
 /// * [`Src::Idle`] is the placeholder after HLS HTTPS recycles the `CurlSource` into [`HlsNet`].
 ///   `avformat_close_input` may still invoke AVIO; this arm refuses I/O instead of dialing a
 ///   dummy socket.
@@ -1468,6 +1484,7 @@ enum Src {
     /// `curlio`'s registry instead of a pointer the engine holds. `curlio`'s module doc says why
     /// that is not the accident it looks like.
     Curl(Box<crate::curlio::CurlSource>),
+    File(std::fs::File),
     Idle,
 }
 
@@ -1478,6 +1495,12 @@ impl Src {
         match self {
             Src::Socket { hs, .. } => plx_net::stream::http_body_receipt(*hs),
             Src::Curl(cs) => cs.body_receipt(),
+            // Every byte of a local file is already "received": nothing is in flight.
+            Src::File(_) => plx_net::stream::BodyReceipt {
+                ahead: 0,
+                finished: true,
+                stepped: false,
+            },
             Src::Idle => plx_net::stream::BodyReceipt {
                 ahead: 0,
                 finished: false,
@@ -2191,7 +2214,7 @@ impl AvioState {
 
     fn transfer_finished(&self) -> bool {
         match &self.src {
-            Src::Idle => true,
+            Src::Idle | Src::File(_) => true,
             Src::Socket { hs, .. } => plx_net::stream::http_body_done(*hs),
             Src::Curl(cs) => cs.body_complete(),
         }
@@ -2207,7 +2230,8 @@ impl AvioState {
     /// redials on `Transport`. Do not raise CAP.
     fn drain_wire(&mut self) -> bool {
         const CAP: usize = 384 * 1024;
-        if matches!(self.src, Src::Idle) {
+        // A local file has no connection to keep open: the park simply waits.
+        if matches!(self.src, Src::Idle | Src::File(_)) {
             return false;
         }
         if unsafe { crate::aq::aq_is_aborted(self.aq) } {
@@ -2237,7 +2261,7 @@ impl AvioState {
                     plx_net::stream::http_drain_available(*hs, &mut self.bounce[start..])
                 }
                 Src::Curl(cs) => cs.drain_available(&mut self.bounce[start..]),
-                Src::Idle => 0,
+                Src::File(_) | Src::Idle => 0,
             };
             if n > 0 {
                 self.bounce.truncate(start + n as usize);
@@ -2352,6 +2376,20 @@ fn avio_stopped(s: &mut AvioState) -> c_int {
     AVERROR_IO
 }
 
+/// One read of a local file in the transports' three-way convention: `>0` bytes, `0` end of file,
+/// `<0` an I/O error (a drive pulled mid-play reads as `EIO`). An interrupted read is retried.
+fn file_read(file: &mut std::fs::File, dst: &mut [u8]) -> c_int {
+    use std::io::Read;
+    let want = dst.len().min(c_int::MAX as usize);
+    loop {
+        match file.read(&mut dst[..want]) {
+            Ok(n) => return n as c_int,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(_) => return -1,
+        }
+    }
+}
+
 extern "C" fn read_cb(op: *mut c_void, dst: *mut u8, n: c_int) -> c_int {
     unsafe {
         let s = &mut *(op as *mut AvioState);
@@ -2421,6 +2459,8 @@ extern "C" fn read_cb(op: *mut c_void, dst: *mut u8, n: c_int) -> c_int {
                     live_deadline,
                     checkpoint,
                 ),
+                Src::File(_) if dst.is_null() || n <= 0 => 0,
+                Src::File(file) => file_read(file, std::slice::from_raw_parts_mut(dst, n as usize)),
                 Src::Idle => return AVERROR_EOF,
             };
             let wake =
@@ -2602,6 +2642,10 @@ extern "C" fn seek_cb(op: *mut c_void, offset: i64, whence: c_int) -> i64 {
             // deliberate: bytes from the head of the file, delivered as though they were the bytes
             // at `target`, are corruption that looks like success.
             Src::Curl(cs) => cs.seek(target),
+            Src::File(file) => {
+                use std::io::Seek;
+                file.seek(std::io::SeekFrom::Start(target as u64)).is_ok()
+            }
             Src::Idle => false,
         };
         if let Some(cs) = hopped_to_tls {
@@ -3440,6 +3484,129 @@ fn open_curl_hop(
 /// The progressive (direct-play) open of a PLAINTEXT part URL, redirects followed. A PMS-hosted
 /// trailer answers its Part URL with a `302` to a presigned CDN URL — usually https, which lands
 /// on the curl source. Publishes the same two diagnostics the TLS arm of `demux` does.
+/// Open a local file for [`Src::File`] and publish its size, as the network arms publish theirs.
+/// `None` when it cannot be opened or sized. The path is never logged: a file name is the
+/// viewer's, and the event log can leave the set.
+fn open_local_file(path: &std::path::Path) -> Option<(Src, i64)> {
+    let opened = std::fs::File::open(path).and_then(|f| {
+        let size = f.metadata()?.len();
+        Ok((f, size))
+    });
+    match opened {
+        Ok((file, size)) => {
+            let size = i64::try_from(size).unwrap_or(i64::MAX);
+            SHARED.file_size.store(size, Ordering::Release);
+            crate::player::log(&format!("ff: open file size={size}"));
+            Some((Src::File(file), size))
+        }
+        Err(e) => {
+            crate::player::log(&format!("ff: file open FAILED ({:?})", e.kind()));
+            None
+        }
+    }
+}
+
+/// What [`probe_file`] read from a local file's container: the facts a Load payload must declare.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct FileStreams {
+    /// The best video stream, `None` when the file has none.
+    pub video: Option<VideoStream>,
+    /// Every audio stream's codec, by FFmpeg name (`"ac3"`, `"eac3"`, `"aac"`, `"dts"`, …), in file
+    /// order — the order `demux` matches a declared codec in (`audio_stream_matching`).
+    pub audio: Vec<String>,
+}
+
+/// The video half of [`FileStreams`].
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct VideoStream {
+    /// FFmpeg's codec name: `"h264"`, `"hevc"`, or whatever else the file carries.
+    pub codec: String,
+    pub width: i32,
+    pub height: i32,
+    /// The container's average frame rate; 0 when it does not say.
+    pub fps: f64,
+    /// The Dolby Vision configuration record, when the container carries one.
+    pub dovi: Option<AVDOVIDecoderConfigurationRecord>,
+}
+
+/// Why [`probe_file`] could not read a file's streams.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProbeFail {
+    /// The bundled FFmpeg did not load, or is not the version this build reads.
+    Unavailable,
+    /// The file could not be opened, or no bundled demuxer recognises its container.
+    Open,
+    /// The container opened but its streams could not be read.
+    Streams,
+}
+
+/// **Read a local file's streams**, for the Load declaration a local play needs (no server
+/// describes the file). Blocking — a USB drive can take seconds — so call it off the frame thread.
+///
+/// Opened through libavformat's own `file` protocol (the one protocol the bundled build carries),
+/// not the demuxer's AVIO: nothing here reads packets, so the lane and teardown machinery the AVIO
+/// exists for has nothing to do. The container and parsers are the same ones `demux` will use.
+pub fn probe_file(path: &std::path::Path) -> Result<FileStreams, ProbeFail> {
+    if !abi_ok() {
+        return Err(ProbeFail::Unavailable);
+    }
+    ensure_registered();
+    // libavformat would read `name:` as a protocol prefix; an absolute path starts with `/`.
+    let Ok(cpath) = CString::new(path.as_os_str().as_encoded_bytes()) else {
+        return Err(ProbeFail::Open);
+    };
+    unsafe {
+        let mut fmt: *mut AVFormatContext = std::ptr::null_mut();
+        let r = avformat_open_input(
+            &mut fmt,
+            cpath.as_ptr(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        );
+        if r < 0 || fmt.is_null() {
+            crate::player::log(&format!("probe: open failed r={r}"));
+            return Err(ProbeFail::Open);
+        }
+        if avformat_find_stream_info(fmt, std::ptr::null_mut()) < 0 {
+            crate::player::log("probe: find_stream_info failed");
+            avformat_close_input(&mut fmt);
+            return Err(ProbeFail::Streams);
+        }
+        let streams = (*fmt).streams;
+        let codec_name = |cp: *const AVCodecParameters| {
+            std::ffi::CStr::from_ptr(avcodec_get_name((*cp).codec_id))
+                .to_string_lossy()
+                .into_owned()
+        };
+        let mut found = FileStreams::default();
+        for i in 0..(*fmt).nb_streams {
+            let cp = stream_codecpar(*streams.add(i as usize));
+            if (*cp).codec_type == AVMEDIA_TYPE_AUDIO {
+                found.audio.push(codec_name(cp));
+            }
+        }
+        let vi = av_find_best_stream(fmt, AVMEDIA_TYPE_VIDEO, -1, -1, std::ptr::null_mut(), 0);
+        if vi >= 0 {
+            let st = *streams.add(vi as usize);
+            let cp = stream_codecpar(st);
+            let rate = stream_avg_frame_rate(st);
+            found.video = Some(VideoStream {
+                codec: codec_name(cp),
+                width: (*cp).width,
+                height: (*cp).height,
+                fps: if rate.num > 0 && rate.den > 0 {
+                    f64::from(rate.num) / f64::from(rate.den)
+                } else {
+                    0.0
+                },
+                dovi: dovi_conf(cp),
+            });
+        }
+        avformat_close_input(&mut fmt);
+        Ok(found)
+    }
+}
+
 fn open_plain_progressive(
     hs_p: *mut HttpStream,
     origin: &plx_plex::plex::Origin,
@@ -3528,6 +3695,8 @@ fn hls_source_read(
             &mut plx_base::checkpoint::NoCheckpoint,
         ),
         Src::Curl(cs) => cs.read_until(dst, deadline, &mut plx_base::checkpoint::NoCheckpoint),
+        // HLS is a network playlist; `demux` never builds an HLS session over a local file.
+        Src::File(_) => return Err(HlsExit::Failed("HLS source is a local file")),
         Src::Idle => return Err(HlsExit::Failed("HLS source idle")),
     };
     // The wake used to interrupt a blocked body read is deliberately transport-shaped (EOF for
@@ -7477,18 +7646,30 @@ fn open_input_failure_note(r: c_int, lane_aborted: bool) -> String {
     }
 }
 
+/// **What the demuxer reads**: a stream on a server, or a local file.
+pub enum DemuxSource {
+    /// An [`Origin`](plx_plex::plex::Origin) rather than a `(host, port)` pair because **the
+    /// scheme decides the transport**: `http` reads through the Engine's `stream.rs` socket,
+    /// `https` through [`crate::curlio`]. An origin is parsed from a URL and never rebuilt from an
+    /// address, which is what keeps the `plex.direct` hostname TLS validates against intact all
+    /// the way down here (`net/origin.rs`). `path` carries the query.
+    Remote {
+        origin: plx_plex::plex::Origin,
+        path: String,
+    },
+    /// An absolute path on a local filesystem (a USB drive), read through [`Src::File`]. Never
+    /// HLS, never adaptive.
+    File(std::path::PathBuf),
+}
+
 /// The demux thread body (spawned by `engine::start_bufferfeed`).
 ///
-/// Takes an [`Origin`](plx_plex::plex::Origin) rather than a `(host, port)` pair because **the scheme
-/// decides the transport**: `http` reads through the Engine's `stream.rs` socket, `https` through
-/// [`crate::curlio`]. An origin is parsed from a URL and never rebuilt from an address, which is
-/// what keeps the `plex.direct` hostname TLS validates against intact all the way down here
-/// (`net/origin.rs`). `hs` is still passed on both paths — it is the Engine's, and it stays
-/// unused (fd = -1, published as `SHARED.hs_ptr`) when the origin turns out to be https.
+/// [`DemuxSource`] says which transport is under the AVIO. `hs` is still passed on every path —
+/// it is the Engine's, and it stays unused (fd = -1, published as `SHARED.hs_ptr`) when the
+/// source turns out to be https or a local file.
 pub fn demux(
     off: &plx_base::task::OffFrame,
-    origin: plx_plex::plex::Origin,
-    path: String,
+    source: DemuxSource,
     acodec: String,
     abr: Option<(crate::route::HlsAbrControl, crate::route::WorkerTicket)>,
     auto_original: Option<crate::route::AutoOriginalWatch>,
@@ -7512,58 +7693,56 @@ pub fn demux(
     let aq_p = aq.0; // VIDEO lane (also the AVIO abort ptr + EOF marker)
     let aqa_p = aqa.0; // AUDIO lane (es=2) — always a distinct queue on the ff (two-lane) path
     let hs_p = hs.0;
-    if path
-        .split_once('?')
-        .map_or(path.as_str(), |(plain, _)| plain)
-        .to_ascii_lowercase()
-        .ends_with(".m3u8")
-    {
-        crate::player::log("hls: segmented demux start");
-        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            hls_demux(off, &origin, &path, &acodec, abr, aq_p, aqa_p, hs_p)
-        }));
-        match outcome {
-            Ok(Ok(())) | Ok(Err(HlsExit::Aborted)) => {}
-            Ok(Err(HlsExit::Failed(why))) => {
-                crate::player::log(&format!("hls: demux failed: {why}"));
-                if PUSHED_ANY.load(Ordering::Relaxed) {
+    if let DemuxSource::Remote { origin, path } = &source {
+        let plain = path.split_once('?').map_or(path.as_str(), |(plain, _)| plain);
+        if plain.to_ascii_lowercase().ends_with(".m3u8") {
+            crate::player::log("hls: segmented demux start");
+            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                hls_demux(off, origin, path, &acodec, abr, aq_p, aqa_p, hs_p)
+            }));
+            match outcome {
+                Ok(Ok(())) | Ok(Err(HlsExit::Aborted)) => {}
+                Ok(Err(HlsExit::Failed(why))) => {
+                    crate::player::log(&format!("hls: demux failed: {why}"));
+                    if PUSHED_ANY.load(Ordering::Relaxed) {
+                        SHARED.demux_io_failed.store(true, Ordering::Release);
+                    } else {
+                        SHARED.demux_failed.store(true, Ordering::Release);
+                    }
+                }
+                Ok(Err(HlsExit::NotReady)) => {
+                    crate::player::log("hls: demux failed: playlist resource was not ready");
+                    if PUSHED_ANY.load(Ordering::Relaxed) {
+                        SHARED.demux_io_failed.store(true, Ordering::Release);
+                    } else {
+                        SHARED.demux_failed.store(true, Ordering::Release);
+                    }
+                }
+                Ok(Err(HlsExit::PrimeExpired)) => {
+                    crate::player::log("hls: demux failed: unexpected active-stream prime deadline");
                     SHARED.demux_io_failed.store(true, Ordering::Release);
-                } else {
+                }
+                Ok(Err(HlsExit::StallAbort(_))) => {
+                    // The abort rule is handled where it fires, inside the segment loop; reaching here
+                    // means it escaped one of the candidate paths, which do not arm it.
+                    crate::player::log("hls: demux failed: stall abort escaped the segment loop");
+                    SHARED.demux_io_failed.store(true, Ordering::Release);
+                }
+                Err(_) => {
+                    crate::player::log("hls: demux panicked");
                     SHARED.demux_failed.store(true, Ordering::Release);
                 }
             }
-            Ok(Err(HlsExit::NotReady)) => {
-                crate::player::log("hls: demux failed: playlist resource was not ready");
-                if PUSHED_ANY.load(Ordering::Relaxed) {
-                    SHARED.demux_io_failed.store(true, Ordering::Release);
-                } else {
-                    SHARED.demux_failed.store(true, Ordering::Release);
-                }
-            }
-            Ok(Err(HlsExit::PrimeExpired)) => {
-                crate::player::log("hls: demux failed: unexpected active-stream prime deadline");
-                SHARED.demux_io_failed.store(true, Ordering::Release);
-            }
-            Ok(Err(HlsExit::StallAbort(_))) => {
-                // The abort rule is handled where it fires, inside the segment loop; reaching here
-                // means it escaped one of the candidate paths, which do not arm it.
-                crate::player::log("hls: demux failed: stall abort escaped the segment loop");
-                SHARED.demux_io_failed.store(true, Ordering::Release);
-            }
-            Err(_) => {
-                crate::player::log("hls: demux panicked");
+            if unproductive_exit_failed(PUSHED_ANY.load(Ordering::Relaxed), unsafe {
+                crate::aq::aq_is_aborted(aq_p)
+            }) {
                 SHARED.demux_failed.store(true, Ordering::Release);
             }
+            crate::aq::aq_set_eof(aq_p);
+            crate::aq::aq_set_eof(aqa_p);
+            crate::player::log("hls: segmented demux ended");
+            return;
         }
-        if unproductive_exit_failed(PUSHED_ANY.load(Ordering::Relaxed), unsafe {
-            crate::aq::aq_is_aborted(aq_p)
-        }) {
-            SHARED.demux_failed.store(true, Ordering::Release);
-        }
-        crate::aq::aq_set_eof(aq_p);
-        crate::aq::aq_set_eof(aqa_p);
-        crate::player::log("hls: segmented demux ended");
-        return;
     }
     if let Some(watch) = auto_original.as_ref() {
         // Auto deliberately begins by trying Original. Publish that state before the first
@@ -7605,8 +7784,14 @@ pub fn demux(
     // whole progressive session, read absolutely, for the reason `advance_to` documents.
     let mut original_since = std::time::Instant::now();
     // `base()` re-brackets a v6 host, which is what a URL needs; the plaintext arm hands the
-    // `Origin` itself to `open_plain_progressive`, which dials its BARE `host()`.
-    let url = format!("{}{}", origin.base(), path); // delivery identity; may carry a token, never logged
+    // `Origin` itself to `open_plain_progressive`, which dials its BARE `host()`. A local file's
+    // identity is its `file://` URL (the ASS source key below).
+    // Delivery identity; may carry a token or a file name, never logged.
+    let url = match &source {
+        DemuxSource::Remote { origin, path } => format!("{}{}", origin.base(), path),
+        DemuxSource::File(file) => format!("file://{}", file.display()),
+    };
+    let tls = matches!(&source, DemuxSource::Remote { origin, .. } if origin.is_tls());
 
     // PANIC BARRIER around the whole producer body. Not about the unwind itself — this thread is
     // started by `task::spawn`, so std already catches a panic at the thread boundary and turns it
@@ -7643,7 +7828,7 @@ pub fn demux(
                 // aborts the lane first and this check refuses to start I/O. Creating/registering the
                 // source only after the check leaves a window where teardown's one wake sees nothing
                 // and the demuxer then opens a fresh connection under the main thread's join.
-                let mut curl_open = if origin.is_tls() {
+                let mut curl_open = if tls {
                     match crate::curlio::CurlSource::reserve_open() {
                         Ok(r) => Some(r),
                         Err(e) => {
@@ -7662,11 +7847,21 @@ pub fn demux(
                     crate::player::log("ff: aborted before reopen");
                     break;
                 }
-                // ONE decision, here, from the scheme; the only later switch is a plaintext open
-                // redirected to https, which `open_plain_progressive` hands to curl. Both arms publish the same two diagnostics (`dg_http_status`, `file_size`)
-                // before anything else can fail, because the read-out panel is the first thing anybody
-                // looks at when a part will not play and it must mean the same thing either way.
-                let (src, size) = if origin.is_tls() {
+                // ONE decision, here, from the source and its scheme; the only later switch is a
+                // plaintext open redirected to https, which `open_plain_progressive` hands to curl.
+                // Every arm publishes the same diagnostics (`dg_http_status` for the network ones,
+                // `file_size` for all) before anything else can fail, because the read-out panel is
+                // the first thing anybody looks at when a part will not play and it must mean the
+                // same thing either way.
+                let (src, size) = if let DemuxSource::File(file) = &source {
+                    match open_local_file(file) {
+                        Some(opened) => opened,
+                        None => {
+                            SHARED.demux_failed.store(true, Ordering::Release);
+                            break;
+                        }
+                    }
+                } else if tls {
                     let reservation = curl_open
                         .take()
                         .expect("TLS reserved its abort handle above");
@@ -7690,8 +7885,11 @@ pub fn demux(
                         }
                     }
                 } else {
+                    let DemuxSource::Remote { origin, path } = &source else {
+                        unreachable!("the local-file arm is taken above")
+                    };
                     // Redirects followed; an https hop comes back as the curl source.
-                    match open_plain_progressive(hs_p, &origin, &path, aq_p) {
+                    match open_plain_progressive(hs_p, origin, path, aq_p) {
                         Ok(opened) => opened,
                         Err(MediaOpenFail::Aborted) => {
                             crate::player::log("ff: aborted during open");

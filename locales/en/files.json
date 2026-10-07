@@ -18,5 +18,43 @@
   "files.no_drive": {
     "value": "Connect a USB drive with videos",
     "description": "File browser note when no USB drive is mounted"
+  },
+  "files.opening": {
+    "value": "Opening…",
+    "description": "File browser note while a chosen video file is being read before playback"
+  },
+  "files.cant_play.unreadable": {
+    "value": "This file can't be opened",
+    "description": "File browser note when a chosen video file cannot be opened or its format is not supported"
+  },
+  "files.cant_play.player": {
+    "value": "The video player isn't available on this TV",
+    "description": "File browser note when the app's video player libraries are missing on the TV"
+  },
+  "files.cant_play.no_video": {
+    "value": "This file has no video",
+    "description": "File browser note when a chosen file has no video stream"
+  },
+  "files.cant_play.video_codec": {
+    "value": "This TV can't play {codec} video",
+    "args": {
+      "codec": "str"
+    },
+    "description": "File browser note when the video format of a chosen file is not supported; {codec} is a codec name such as VP9"
+  },
+  "files.cant_play.no_audio": {
+    "value": "Videos without sound can't be played yet",
+    "description": "File browser note when a chosen video has no audio track (not supported yet)"
+  },
+  "files.cant_play.audio_codec": {
+    "value": "This TV can't play {codec} audio",
+    "args": {
+      "codec": "str"
+    },
+    "description": "File browser note when no audio track of a chosen file is in a supported format; {codec} is a codec name such as OPUS"
+  },
+  "files.cant_play.dolby_vision": {
+    "value": "This Dolby Vision video can't be shown on this TV",
+    "description": "File browser note when a Dolby Vision video uses a kind this TV cannot display"
   }
 }
