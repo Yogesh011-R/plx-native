@@ -1,3 +1,10 @@
+# TVPlayer
+
+> **This is a modified fork of [PlxNative](https://github.com/GLinnik21/plx-native)** by Gleb Linnik
+> and contributors, licensed under GPL-3.0-or-later. Changes started 2026-10-07: new app id
+> (`com.yogesh.tvplayer`), name and placeholder icons. It is not the official PlxNative app and is
+> not endorsed by its author. The original README follows.
+
 # PlxNative
 
 A fast, unofficial [Plex](https://www.plex.tv/) client for LG webOS televisions. Native, not a web
@@ -101,7 +108,7 @@ Set up LG Developer Mode and connect with webOS Dev Manager, then choose:
 - **Install Homebrew Channel first:** get an app catalogue on the TV, then install PlxNative and
   its updates with the remote.
 
-**Already have Homebrew Channel?** Find [PlxNative in its catalogue](https://repo.webosbrew.org/apps/com.beb.plxnative/)
+**Already have Homebrew Channel?** Find [PlxNative in its catalogue](https://repo.webosbrew.org/apps/com.yogesh.tvplayer/)
 and select **Install**. Skip the computer setup.
 
 **Developer Mode needs periodic renewal.** If it expires and LG disables Developer Mode, apps

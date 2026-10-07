@@ -7,7 +7,7 @@
 //!
 //! | field       | plex.tv said        | the PMS said     |
 //! |-------------|---------------------|------------------|
-//! | Product     | `Plex for webOS`    | `PlxNative`      |
+//! | Product     | `Plex for webOS`    | `TVPlayer`      |
 //! | Version     | `1.0`               | `0.1.0`          |
 //! | Device      | `LG TV`             | `webOS`          |
 //! | Device-Name | `Plex (LG webOS)`   | `Living Room TV` |
@@ -33,7 +33,7 @@
 //! once from `/dev/urandom` and persisted by [`session`](super::session).
 
 /// The product name. Unique, and not `Plex …` anything.
-pub const PRODUCT: &str = "PlxNative";
+pub const PRODUCT: &str = "TVPlayer";
 
 /// The app version, handed in by the application: `plx_plex` cannot see `PLX_VERSION`, because a
 /// `cargo:rustc-env` reaches one crate only and the rule that derives it (`rust-modules/build.rs`)
@@ -137,8 +137,8 @@ pub const VENDOR: &str = "LG";
 pub fn device_name() -> &'static str {
     static NAME: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     NAME.get_or_init(|| match plx_base::paths::flavour() {
-        None => "PlxNative (LG TV)".to_string(),
-        Some(f) => format!("PlxNative {f} (LG TV)"),
+        None => "TVPlayer (LG TV)".to_string(),
+        Some(f) => format!("TVPlayer {f} (LG TV)"),
     })
 }
 
@@ -212,10 +212,10 @@ mod tests {
     fn only_a_flavoured_install_renames_the_device() {
         let name = super::device_name();
         match plx_base::paths::flavour() {
-            None => assert_eq!(name, "PlxNative (LG TV)"),
+            None => assert_eq!(name, "TVPlayer (LG TV)"),
             Some(f) => assert!(name.contains(f), "{name:?} does not name the {f} install"),
         }
-        assert!(name.starts_with("PlxNative"));
+        assert!(name.starts_with("TVPlayer"));
     }
 
     /// On the host there is no `/var/run/nyx/os_info.json`, so this exercises exactly the

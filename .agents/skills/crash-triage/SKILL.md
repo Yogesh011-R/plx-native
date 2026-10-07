@@ -80,17 +80,17 @@ All paths are relative to the repo root. The TV address comes from the `Makefile
 
 ## First: which install crashed
 
-Three builds can be on this television — `com.beb.plxnative` (stable, what users install),
-`com.beb.plxnative.debug` (the developer build beside it, and the Makefile's **default**), and
-`com.beb.plxnative.nightly` (the nightly build, its own install beside the other two). Each has
+Three builds can be on this television — `com.yogesh.tvplayer` (stable, what users install),
+`com.yogesh.tvplayer.debug` (the developer build beside it, and the Makefile's **default**), and
+`com.yogesh.tvplayer.nightly` (the nightly build, its own install beside the other two). Each has
 its own app directory, its own runtime root and therefore its own **crash log**, so triaging the
 wrong one produces a clean bill of health for an app that is dying. Ask the Makefile rather than
 typing a path:
 
 ```bash
-make -s print-appid    FLAVOR=debug     # com.beb.plxnative.debug
+make -s print-appid    FLAVOR=debug     # com.yogesh.tvplayer.debug
 make -s print-appdir   FLAVOR=debug     # where the binary and the .so files are
-make -s print-rundir   FLAVOR=debug     # /tmp/com.beb.plxnative.debug   (stable: /tmp)
+make -s print-rundir   FLAVOR=debug     # /tmp/com.yogesh.tvplayer.debug   (stable: /tmp)
 make -s print-eventlog FLAVOR=debug
 ```
 
@@ -151,7 +151,7 @@ publication preserves the prior snapshot; it is not proof that the current proce
 **The event log's FIRST line names the install**, before anything can fail, so use it to identify the crashing process:
 
 ```
-install: id=com.beb.plxnative.debug flavour=debug runtime=/tmp/com.beb.plxnative.debug features=dev APPID_env=…
+install: id=com.yogesh.tvplayer.debug flavour=debug runtime=/tmp/com.yogesh.tvplayer.debug features=dev APPID_env=…
 appdir: /media/… (from current_exe)
 ```
 
@@ -258,12 +258,12 @@ tools/tv-ssh ssh tv "rm -f $RUN/plxnative-crashtest"
   `pkg/plxnative.debug` and `addr2line` on the local fault event.
 - **Older notes say `/tmp/poc-*`.** The app was renamed; the names are all `plxnative-*` now,
   and they sit in the install's runtime root rather than always in `/tmp`.
-- **`com.beb.plxnative` is a PREFIX of `com.beb.plxnative.debug`.** Anything that picks a crash
+- **`com.yogesh.tvplayer` is a PREFIX of `com.yogesh.tvplayer.debug`.** Anything that picks a crash
   block, a maps line or a log by app-directory path must anchor on a delimiter — match `/<id>/`,
   never the bare id — or every stable-id filter silently accepts the debug install's evidence too
   and you symbolize one app's addresses against the other's binary. `src/main.c`'s `bin:` matcher
   documents the same trap one level down: it tests `/plxnative\n` and `/plxnative ` rather than a
-  bare substring, because the app directory is itself named `…com.beb.plxnative/` and a loose test
+  bare substring, because the app directory is itself named `…com.yogesh.tvplayer/` and a loose test
   also matched libraries deployed beside the binary.
 - **A guard-page allocator exists** for memory-corruption hunts (`src/gpdebug.c`, never in
   the normal build) — reach for it when a SIGSEGV moves around between runs.

@@ -1,10 +1,10 @@
 {
-  "id": "com.beb.plxnative",
+  "id": "com.yogesh.tvplayer",
   "version": "0.7.0",
-  "vendor": "beb",
+  "vendor": "yogesh",
   "type": "native",
   "main": "plxnative",
-  "title": "PlxNative",
+  "title": "TVPlayer",
   "appDescription": "Unofficial native Plex client - not affiliated with Plex",
   "icon": "icon.png",
   "largeIcon": "largeIcon.png",
