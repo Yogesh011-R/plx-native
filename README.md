@@ -7,6 +7,7 @@
 >
 > **Goal:** a native webOS video player for USB and local-network files that uses the TV's
 > hardware decoder, without Plex. Status and next steps: [docs/tvplayer-plan.md](docs/tvplayer-plan.md).
+> Build and install on a TV: [docs/tvplayer-build-and-install.md](docs/tvplayer-build-and-install.md).
 > The original README follows; its Plex features are being removed.
 
 # PlxNative

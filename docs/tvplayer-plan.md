@@ -101,6 +101,9 @@ Status: ✅ done · 🔄 next · ⬜ planned
 
 ## Development setup
 
+Building, installing and launching the `.ipk` on a TV, step by step:
+[tvplayer-build-and-install.md](tvplayer-build-and-install.md).
+
 - **TV build:** push to `main` on the fork; the `CI` workflow's `cross-build` job uploads
   `com.yogesh.tvplayer.debug_*_arm.ipk`. The webOS NDK has no x86_64 Linux build, so it cannot
   run locally on this machine. Install with webOS Dev Manager (Developer Mode).
